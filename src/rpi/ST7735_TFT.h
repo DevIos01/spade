@@ -132,8 +132,11 @@ static void st7735_fill_start() {
   tft_dc_high(); // (no data)
 }
 
-static void st7735_fill_send(uint16_t pixel) {
-  spi_write_blocking(SPI_TFT_PORT, (uint8_t *)&pixel, sizeof(uint16_t));
+static void st7735_fill_send(uint16_t pixel, bool print) {
+    spi_write_blocking(SPI_TFT_PORT, (uint8_t *)&pixel, sizeof(uint16_t));
+    if (print) {
+        printf("%04X\n", pixel);
+    }
 }
 
 static void st7735_fill_finish(void) {

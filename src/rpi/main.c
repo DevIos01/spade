@@ -334,9 +334,11 @@ int main() {
 
     // Render
     render_errorbuf();
+    printf("FRAME_START\n");
     st7735_fill_start();
     render(st7735_fill_send);
     st7735_fill_finish();
+    printf("\nFRAME_END\n");
   }
 
   /**

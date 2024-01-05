@@ -1,0 +1,22 @@
+<html>
+<head>
+    <title>Sprig Real-time Frame Viewer</title>
+</head>
+<body>
+    <canvas id="canvas" width="160" height="128"></canvas>
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const ws = new WebSocket('ws://localhost:3000');
+
+        ws.onmessage = function(event) {
+            const blob = event.data;
+            const img = new Image();
+            img.onload = function() {
+                ctx.drawImage(img, 0, 0);
+            };
+            img.src = URL.createObjectURL(blob);
+        };
+    </script>
+</body>
+</html>
