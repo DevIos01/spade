@@ -66,6 +66,7 @@ static void fatal_error() {
  * (gpio_set_input_hysteresis_enabled was too slow.)
  */
 #define HISTORY_LEN (64)
+#define MAX_TEST_CASES 10
 typedef struct {
   uint8_t history[HISTORY_LEN/8];
   uint8_t last_state;
@@ -198,6 +199,83 @@ static int load_new_scripts(void) {
   }
 #endif
 
+typedef enum {
+    TEST_CASE_IDLE,
+    TEST_CASE_RUNNING,
+    TEST_CASE_DELAY
+} TestCaseState;
+
+TestCaseState testCaseState = TEST_CASE_IDLE;
+int currentTestCaseIndex = 0;
+uint32_t testCaseStartTime = 0;
+const int testCaseDelayMs = 5000;
+
+bool containsTestCases(const char* script) {
+    const char* delimiter = "/* -------------------------TEST------------------- */";
+    return strstr(script, delimiter) != NULL;
+}
+
+void splitIntoTestCases(const char* script, char** testCases, int* testCaseCount) {
+    const char* delimiter = "/* -------------------------TEST------------------- */";
+    const char* start = script;
+    const char* end;
+    *testCaseCount = 0;
+
+    printf("Debug: Starting to split test cases\n");
+
+    while ((end = strstr(start, delimiter)) != NULL) {
+        int length = end - start;
+        if (length > 0) {
+            testCases[*testCaseCount] = (char*)malloc(length + 1);
+            strncpy(testCases[*testCaseCount], start, length);
+            testCases[*testCaseCount][length] = '\0';
+
+            printf("Debug: Test Case %d extracted, length: %d\n", *testCaseCount, length);
+            printf("Debug: Test Case %d content: %s\n", *testCaseCount, testCases[*testCaseCount]);
+
+            (*testCaseCount)++;
+        }
+        start = end + strlen(delimiter);
+    }
+
+    if (*start != '\0') {
+        int length = strlen(start);
+        testCases[*testCaseCount] = (char*)malloc(length + 1);
+        strncpy(testCases[*testCaseCount], start, length);
+        testCases[*testCaseCount][length] = '\0';
+
+        printf("Debug: Final Test Case extracted, length: %d\n", length);
+        printf("Debug: Final Test Case content: %s\n", testCases[*testCaseCount]);
+
+        (*testCaseCount)++;
+    }
+
+    printf("Debug: Total Test Cases: %d\n", *testCaseCount);
+}
+
+void runTestCase(const char* testCase) {
+    printf("Running Test Case %d...\n", currentTestCaseIndex);
+    js_run(testCase, strlen(testCase));
+    testCaseStartTime = to_ms_since_boot(get_absolute_time());
+    testCaseState = TEST_CASE_RUNNING;
+}
+
+void processTestCases(char** testCases, int testCaseCount) {
+    if (testCaseState == TEST_CASE_RUNNING) {
+        if (to_ms_since_boot(get_absolute_time()) - testCaseStartTime >= testCaseDelayMs) {
+            currentTestCaseIndex++;
+            if (currentTestCaseIndex < testCaseCount) {
+                runTestCase(testCases[currentTestCaseIndex]);
+            } else {
+                testCaseState = TEST_CASE_IDLE;
+                for (int i = 0; i < testCaseCount; ++i) {
+                    free(testCases[i]);
+                }
+            }
+        }
+    }
+}
+
 int main() {
   // Overclock the RP2040!
   set_sys_clock_khz(270000, true);
@@ -292,10 +370,21 @@ int main() {
   // Drain any remaining keypresses
   while (multicore_fifo_rvalid()) multicore_fifo_pop_blocking();
 
-  // Run the code!
-  js_run(save_read(), strlen(save_read()));
+    const char *script = save_read();
+    char *testCases[MAX_TEST_CASES];
+    int testCaseCount = 0;
 
-  #ifdef SPADE_AUDIO
+    if (containsTestCases(script)) {
+        splitIntoTestCases(script, testCases, &testCaseCount);
+        if (testCaseCount > 0) {
+            runTestCase(testCases[0]);
+        }
+    } else {
+        printf("Running script without test cases...\n");
+        js_run(script, strlen(script));
+    }
+
+#ifdef SPADE_AUDIO
     // Initialize audio
     piano_init((PianoOpts) {
       .song_free = piano_jerry_song_free,
@@ -309,7 +398,12 @@ int main() {
   dbg("okay launching game loop");
 
   // Event loop!
-  while (1) {
+while (1) {
+
+    if (testCaseState != TEST_CASE_IDLE) {
+        processTestCases(testCases, testCaseCount);
+    }
+
     // Handle any new button presses
     while (multicore_fifo_rvalid()) {
       spade_call_press(multicore_fifo_pop_blocking());
@@ -329,15 +423,16 @@ int main() {
       audio_try_push_samples();
     #endif
 
-    // Break if they're trying to upload a new game
-    if (load_new_scripts()) break;
-
     // Render
     render_errorbuf();
     st7735_fill_start();
     render(st7735_fill_send);
     st7735_fill_finish();
-  }
+
+    if (load_new_scripts() || testCaseState == TEST_CASE_IDLE) {
+        break;
+    }
+}
 
   /**
    * User uploaded a new game mid-game. We're gonna try to reboot here,
@@ -378,4 +473,4 @@ int main() {
    */
   watchdog_enable(0, false);
   while (1) {}
-}
+  }
